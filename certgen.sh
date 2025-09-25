@@ -353,13 +353,13 @@ j=1; IFS=','; for dn in $SAN_DNS; do dn="${dn// /}"; [ -z "$dn" ] || echo "DNS.$
 if [ -f "$CERT_DIR/myServerPrivateKey.key" ]; then chown "$REMOTE_SPLUNK_USER:$REMOTE_SPLUNK_USER" "$CERT_DIR/myServerPrivateKey.key" || true; chmod 600 "$CERT_DIR/myServerPrivateKey.key" || true; fi
 if [ -f "$CERT_DIR/myServerPrivateKey-decrypted.key" ]; then chown "$REMOTE_SPLUNK_USER:$REMOTE_SPLUNK_USER" "$CERT_DIR/myServerPrivateKey-decrypted.key" || true; chmod 600 "$CERT_DIR/myServerPrivateKey-decrypted.key" || true; fi
 if [ ! -f "$CERT_DIR/myServerPrivateKey.key" ]; then
-  "sudo -u "$REMOTE_SPLUNK_USER" openssl genrsa -aes256 -passout pass:"$SVR_PW" -out "$CERT_DIR/myServerPrivateKey.key" 2048
+  sudo -u "$REMOTE_SPLUNK_USER" openssl genrsa -aes256 -passout pass:"$SVR_PW" -out "$CERT_DIR/myServerPrivateKey.key" 2048
 fi
 if [ "$USE_DECRYPTED" = "y" ]; then
-  "sudo -u "$REMOTE_SPLUNK_USER" openssl rsa -in "$CERT_DIR/myServerPrivateKey.key" -passin pass:"$SVR_PW" -out "$CERT_DIR/myServerPrivateKey-decrypted.key"
+  sudo -u "$REMOTE_SPLUNK_USER" openssl rsa -in "$CERT_DIR/myServerPrivateKey.key" -passin pass:"$SVR_PW" -out "$CERT_DIR/myServerPrivateKey-decrypted.key"
   chown "$REMOTE_SPLUNK_USER:$REMOTE_SPLUNK_USER" "$CERT_DIR/myServerPrivateKey-decrypted.key" || true; chmod 600 "$CERT_DIR/myServerPrivateKey-decrypted.key" || true
 fi
-"sudo -u "$REMOTE_SPLUNK_USER" openssl req -new -key "$CERT_DIR/myServerPrivateKey.key" -passin pass:"$SVR_PW" -out "$CERT_DIR/myServerCertificate.csr" -config "$SAN_CNF"
+sudo -u "$REMOTE_SPLUNK_USER" openssl req -new -key "$CERT_DIR/myServerPrivateKey.key" -passin pass:"$SVR_PW" -out "$CERT_DIR/myServerCertificate.csr" -config "$SAN_CNF"
 chown "$REMOTE_SPLUNK_USER:$REMOTE_SPLUNK_USER" "$CERT_DIR"/* || true; chmod 600 "$CERT_DIR"/* || true; chmod 700 "$CERT_DIR" || true
 RS
     # Use a host-specific CN for clarity (optional)
@@ -375,12 +375,14 @@ EOF
       -CAcreateserial -out "$CERT_DIR/leaf-$H.pem" -days "$DAYS_VALID" -extensions req_ext -extfile "$SAN_CNF"
     info "Pushing signed leaf & building combined on $H"
     rsync -az -e "ssh $RSH_OPTS" "$CERT_DIR/leaf-$H.pem" "$SSH_USER@$H:$CERT_DIR/myServerCertificate.pem"
-    ssh $RSH_OPTS "$SSH_USER@$H" "$SUDO_CMD bash -lc '
+    ssh $RSH_OPTS "$SSH_USER@$H" "$SUDO_CMD bash -c '
       set -e
-      KEY_TO_USE="'"$CERT_DIR"/myServerPrivateKey.key"'
-      [ -f '"$CERT_DIR"/myServerPrivateKey-decrypted.key' ] && KEY_TO_USE='"$CERT_DIR"/myServerPrivateKey-decrypted.key'
-      cat '"$CERT_DIR"/myServerCertificate.pem' "$KEY_TO_USE" '"$CERT_DIR"/myCACertificate.pem' > '"$CERT_DIR"/splunkd-combined.pem'
-      chown '"$REMOTE_SPLUNK_USER":"$REMOTE_SPLUNK_USER"' '"$CERT_DIR"/'* || true; chmod 600 '"$CERT_DIR"/'* || true; chmod 700 '"$CERT_DIR"' || true
+      KEY_TO_USE=\"$CERT_DIR/myServerPrivateKey.key\"
+      [ -f \"$CERT_DIR/myServerPrivateKey-decrypted.key\" ] && KEY_TO_USE=\"$CERT_DIR/myServerPrivateKey-decrypted.key\"
+      cat \"$CERT_DIR/myServerCertificate.pem\" \"$KEY_TO_USE\" \"$CERT_DIR/myCACertificate.pem\" > \"$CERT_DIR/splunkd-combined.pem\"
+      chown \"$REMOTE_SPLUNK_USER:$REMOTE_SPLUNK_USER\" \"$CERT_DIR\"/* || true
+      chmod 600 \"$CERT_DIR\"/* || true
+      chmod 700 \"$CERT_DIR\" || true
     '"
     # minimal config updates on remote
     read -r -d '' REM_INI <<'RINI'
@@ -403,16 +405,16 @@ RINI
 $REM_INI
 EOS
 $SUDO_CMD chmod +x /tmp/ini_set.sh"
-    ssh $RSH_OPTS "$SSH_USER@$H" bash -lc "'
-      $SUDO_CMD /tmp/ini_set.sh $SPLUNK_HOME/etc/system/local/server.conf sslConfig enableSplunkdSSL true
-      $SUDO_CMD /tmp/ini_set.sh $SPLUNK_HOME/etc/system/local/server.conf sslConfig serverCert $CERT_DIR/splunkd-combined.pem
-      $SUDO_CMD /tmp/ini_set.sh $SPLUNK_HOME/etc/system/local/server.conf sslConfig sslRootCAPath $CERT_DIR/myCACertificate.pem
-      $SUDO_CMD /tmp/ini_set.sh $SPLUNK_HOME/etc/system/local/server.conf sslConfig sslVersions $TLS_VER
-      $SUDO_CMD /tmp/ini_set.sh $SPLUNK_HOME/etc/system/local/server.conf sslConfig requireClientCert $( [[ "$REQUIRE_MTLS" == "y" ]] && echo true || echo false )
-      $SUDO_CMD chown $REMOTE_SPLUNK_USER:$REMOTE_SPLUNK_USER $SPLUNK_HOME/etc/system/local/*.conf || true
-      $SUDO_CMD chmod 600 $SPLUNK_HOME/etc/system/local/*.conf || true
-      if command -v systemctl >/dev/null 2>&1 && systemctl status Splunkd >/dev/null 2>&1; then $SUDO_CMD systemctl restart Splunkd; else $SUDO_CMD -u $REMOTE_SPLUNK_USER $SPLUNK_HOME/bin/splunk restart; fi
-    '"
+    ssh $RSH_OPTS "$SSH_USER@$H" "$SUDO_CMD bash -c \"
+      /tmp/ini_set.sh \\\"$SPLUNK_HOME/etc/system/local/server.conf\\\" sslConfig enableSplunkdSSL true
+      /tmp/ini_set.sh \\\"$SPLUNK_HOME/etc/system/local/server.conf\\\" sslConfig serverCert \\\"$CERT_DIR/splunkd-combined.pem\\\"
+      /tmp/ini_set.sh \\\"$SPLUNK_HOME/etc/system/local/server.conf\\\" sslConfig sslRootCAPath \\\"$CERT_DIR/myCACertificate.pem\\\"
+      /tmp/ini_set.sh \\\"$SPLUNK_HOME/etc/system/local/server.conf\\\" sslConfig sslVersions \\\"$TLS_VER\\\"
+      /tmp/ini_set.sh \\\"$SPLUNK_HOME/etc/system/local/server.conf\\\" sslConfig requireClientCert \\\$( [[ \\\"$REQUIRE_MTLS\\\" == \\\"y\\\" ]] && echo true || echo false )
+      chown $REMOTE_SPLUNK_USER:$REMOTE_SPLUNK_USER \\\"$SPLUNK_HOME/etc/system/local\\\"/*.conf || true
+      chmod 600 \\\"$SPLUNK_HOME/etc/system/local\\\"/*.conf || true
+      if command -v systemctl >/dev/null 2>&1 && systemctl status Splunkd >/dev/null 2>&1; then systemctl restart Splunkd; else sudo -u $REMOTE_SPLUNK_USER \\\"$SPLUNK_HOME/bin/splunk\\\" restart; fi
+    \""
     ok "Remote $H complete."
   done
 else
